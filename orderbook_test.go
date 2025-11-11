@@ -20,3 +20,13 @@ func TestLimit(t *testing.T) {
 
 	fmt.Println(l)
 }
+
+func TestOrderbook(t *testing.T) {
+	ob := NewOrderbook()
+
+	buyOrder := NewOrder(true, big.NewInt(10))
+
+	ob.PlaceOrder(big.NewInt(18_000), buyOrder)
+
+	fmt.Println(ob.Bids)
+}
