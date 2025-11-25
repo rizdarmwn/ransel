@@ -15,6 +15,7 @@ type Match struct {
 }
 
 type Order struct {
+	ID        uint64
 	Size      *big.Int
 	Bid       bool
 	Limit     *Limit
@@ -28,6 +29,7 @@ func (o Orders) Less(i, j int) bool { return o[i].Timestamp < o[j].Timestamp }
 
 func NewOrder(bid bool, size *big.Int) *Order {
 	return &Order{
+		ID:        uint64(time.Now().UnixNano()),
 		Size:      size,
 		Bid:       bid,
 		Timestamp: time.Now().UnixNano(),
@@ -160,6 +162,7 @@ type Orderbook struct {
 
 	AskLimits map[*big.Int]*Limit
 	BidLimits map[*big.Int]*Limit
+	Orders    map[uint64]*Order
 }
 
 func NewOrderbook() *Orderbook {
@@ -168,6 +171,7 @@ func NewOrderbook() *Orderbook {
 		bids:      []*Limit{},
 		AskLimits: make(map[*big.Int]*Limit),
 		BidLimits: make(map[*big.Int]*Limit),
+		Orders:    make(map[uint64]*Order),
 	}
 }
 
@@ -232,6 +236,7 @@ func (ob *Orderbook) PlaceLimitOrder(price *big.Int, o *Order) {
 			ob.AskLimits[price] = limit
 		}
 	}
+	ob.Orders[o.ID] = o
 	limit.AddOrder(o)
 }
 
@@ -268,6 +273,7 @@ func (ob *Orderbook) clearLimit(bid bool, l *Limit) {
 func (ob *Orderbook) CancelOrder(o *Order) {
 	limit := o.Limit
 	limit.DeleteOrder(o)
+	delete(ob.Orders, o.ID)
 }
 
 func (ob *Orderbook) BidTotalVolume() *big.Int {

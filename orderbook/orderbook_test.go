@@ -36,6 +36,7 @@ func TestPlaceLimitOrder(t *testing.T) {
 	ob.PlaceLimitOrder(big.NewInt(10_000), sellOrderA)
 	ob.PlaceLimitOrder(big.NewInt(9_000), sellOrderB)
 
+	assertEq(t, len(ob.Orders), 2)
 	assertEq(t, len(ob.asks), 2)
 }
 
@@ -92,6 +93,8 @@ func TestCancelOrder(t *testing.T) {
 	assertEq(t, ob.BidTotalVolume(), big.NewInt(10))
 
 	ob.CancelOrder(buyOrder)
+	_, ok := ob.Orders[buyOrder.ID]
 
 	assertEq(t, ob.BidTotalVolume(), big.NewInt(0))
+	assertEq(t, ok, false)
 }
