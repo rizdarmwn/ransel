@@ -20,7 +20,7 @@ import (
 
 type Config struct {
 	PrivateKey string `env:"PRIVATE_KEY" envDefault:"ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"` // Default private key is for Anvil
-	ChainPort  string `env:"ANVIL_PORT" envDefault:"8545"`
+	ChainURL   string `env:"CHAIN_URL" envDefault:"http://localhost:8545"`
 	Port       string `env:"PORT" envDefault:"3000"`
 }
 
@@ -85,7 +85,7 @@ func main() {
 
 	fmt.Println("Running server on port ", cfg.Port)
 
-	client, err := ethclient.Dial("http://localhost:" + cfg.ChainPort)
+	client, err := ethclient.Dial(cfg.ChainURL)
 	if err != nil {
 		log.Fatal(err)
 	}
