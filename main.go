@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"crypto/ecdsa"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -9,7 +11,56 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/caarlos0/env/v11"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/rizdarmwn/ransel/orderbook"
+)
+
+type Config struct {
+	PrivateKey string `env:"PRIVATE_KEY" envDefault:"ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"` // Default private key is for Anvil
+	ChainPort  string `env:"ANVIL_PORT" envDefault:"8545"`
+	Port       string `env:"PORT" envDefault:"3000"`
+}
+
+type (
+	OrderType string
+	Market    string
+
+	PlaceOrderRequest struct {
+		Type   OrderType
+		Bid    bool
+		Size   *big.Int
+		Price  *big.Int
+		Market Market
+	}
+
+	Order struct {
+		ID        uint64
+		Price     *big.Int
+		Size      *big.Int
+		Bid       bool
+		Timestamp int64
+	}
+
+	OrderbookData struct {
+		TotalBidVolume *big.Int
+		TotalAskVolume *big.Int
+		Asks           []*Order
+		Bids           []*Order
+	}
+
+	Match struct {
+		SizeFilled *big.Int
+		Price      *big.Int
+	}
+)
+
+const (
+	MARKET_ORDER OrderType = "MARKET"
+	LIMIT_ORDER  OrderType = "LIMIT"
+	MARKET_ETH   Market    = "ETH"
 )
 
 var (
@@ -17,67 +68,73 @@ var (
 )
 
 func main() {
+	cfg := Config{}
+	if err := env.Parse(&cfg); err != nil {
+		log.Fatal(err)
+	}
+
 	mux := http.NewServeMux()
-	ex := NewExchange()
+	ex, err := NewExchange(cfg.PrivateKey)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	mux.HandleFunc("/order", ex.handlePlaceOrder)
 	mux.HandleFunc("/book/{market}", ex.handleGetBook)
 	mux.HandleFunc("/order/{id}", ex.handleCancelOrder)
-	fmt.Println("Running server")
-	log.Fatal(http.ListenAndServe(":3000", mux))
+
+	fmt.Println("Running server on port ", cfg.Port)
+
+	client, err := ethclient.Dial("http://localhost:" + cfg.ChainPort)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	ctx := context.Background()
+	address := common.HexToAddress("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266")
+	balance, err := client.BalanceAt(ctx, address, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println(balance)
+
+	log.Fatal(http.ListenAndServe(":"+cfg.Port, mux))
 }
 
-type OrderType string
+type User struct {
+	privateKey *ecdsa.PrivateKey
+}
 
-const (
-	MARKET_ORDER OrderType = "MARKET"
-	LIMIT_ORDER  OrderType = "LIMIT"
-)
+func NewUser(privateKey string) (*User, error) {
+	privKey, err := crypto.HexToECDSA(privateKey)
+	if err != nil {
+		return nil, err
+	}
 
-type Market string
-
-const (
-	MARKET_ETH Market = "ETH"
-)
+	return &User{
+		privateKey: privKey,
+	}, nil
+}
 
 type Exchange struct {
+	privateKey *ecdsa.PrivateKey
 	orderbooks map[Market]*orderbook.Orderbook
 }
 
-func NewExchange() *Exchange {
+func NewExchange(privateKey string) (*Exchange, error) {
 	orderbooks := make(map[Market]*orderbook.Orderbook)
 	orderbooks[MARKET_ETH] = orderbook.NewOrderbook()
 
-	return &Exchange{
-		orderbooks: orderbooks,
+	pk, err := crypto.HexToECDSA(privateKey)
+	if err != nil {
+		return nil, err
 	}
-}
 
-type PlaceOrderRequest struct {
-	Type   OrderType
-	Bid    bool
-	Size   *big.Int
-	Price  *big.Int
-	Market Market
-}
-
-type Order struct {
-	ID        uint64
-	Price     *big.Int
-	Size      *big.Int
-	Bid       bool
-	Timestamp int64
-}
-
-type OrderbookData struct {
-	TotalBidVolume *big.Int
-	TotalAskVolume *big.Int
-	Asks           []*Order
-	Bids           []*Order
-}
-
-type Match struct {
-	SizeFilled *big.Int
-	Price      *big.Int
+	return &Exchange{
+		privateKey: pk,
+		orderbooks: orderbooks,
+	}, nil
 }
 
 func (ex *Exchange) handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
