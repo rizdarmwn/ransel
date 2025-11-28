@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math/big"
@@ -29,6 +30,7 @@ type (
 	Market    string
 
 	PlaceOrderRequest struct {
+		UserID uint64
 		Type   OrderType
 		Bid    bool
 		Size   *big.Int
@@ -52,6 +54,8 @@ type (
 	}
 
 	Match struct {
+		ID         uint64
+		Bid        bool
 		SizeFilled *big.Int
 		Price      *big.Int
 	}
@@ -73,11 +77,32 @@ func main() {
 		log.Fatal(err)
 	}
 
-	mux := http.NewServeMux()
-	ex, err := NewExchange(cfg.PrivateKey)
+	client, err := ethclient.Dial(cfg.ChainURL)
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	mux := http.NewServeMux()
+	ex, err := NewExchange(cfg.PrivateKey, client)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	privKey, err := crypto.HexToECDSA("92db14e403b83dfe3df233f83dfa3a0d7096f21ca9b0d6d6b8d88b2b4ec1564e")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	user := &User{
+		ID:         67,
+		privateKey: privKey,
+	}
+
+	ex.users[user.ID] = user
+
+	address := "0x976EA74026E726554dB657fA54763abd0C3a0aa9"
+	balance, _ := client.BalanceAt(context.Background(), common.HexToAddress(address), nil)
+	fmt.Println(balance)
 
 	mux.HandleFunc("/order", ex.handlePlaceOrder)
 	mux.HandleFunc("/book/{market}", ex.handleGetBook)
@@ -85,24 +110,11 @@ func main() {
 
 	fmt.Println("Running server on port ", cfg.Port)
 
-	client, err := ethclient.Dial(cfg.ChainURL)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	ctx := context.Background()
-	address := common.HexToAddress("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266")
-	balance, err := client.BalanceAt(ctx, address, nil)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Println(balance)
-
 	log.Fatal(http.ListenAndServe(":"+cfg.Port, mux))
 }
 
 type User struct {
+	ID         uint64
 	privateKey *ecdsa.PrivateKey
 }
 
@@ -118,11 +130,13 @@ func NewUser(privateKey string) (*User, error) {
 }
 
 type Exchange struct {
+	users      map[uint64]*User
 	privateKey *ecdsa.PrivateKey
 	orderbooks map[Market]*orderbook.Orderbook
+	Client     *ethclient.Client
 }
 
-func NewExchange(privateKey string) (*Exchange, error) {
+func NewExchange(privateKey string, client *ethclient.Client) (*Exchange, error) {
 	orderbooks := make(map[Market]*orderbook.Orderbook)
 	orderbooks[MARKET_ETH] = orderbook.NewOrderbook()
 
@@ -132,9 +146,38 @@ func NewExchange(privateKey string) (*Exchange, error) {
 	}
 
 	return &Exchange{
+		Client:     client,
+		users:      make(map[uint64]*User),
 		privateKey: pk,
 		orderbooks: orderbooks,
 	}, nil
+}
+
+func (ex *Exchange) handlePlaceLimitOrder(market Market, price *big.Int, order *orderbook.Order) error {
+	ob := ex.orderbooks[market]
+	ob.PlaceLimitOrder(price, order)
+
+	user, ok := ex.users[order.UserID]
+	if !ok {
+		return errors.New("user not found")
+	}
+
+	exPublicKey := ex.privateKey.Public()
+	exPublicKeyECDSA, ok := exPublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		return errors.New("invalid public key type")
+	}
+
+	exchangeAddress := crypto.PubkeyToAddress(*exPublicKeyECDSA)
+	return transferETH(ex.Client, user.privateKey, exchangeAddress, order.Size)
+}
+
+func (ex *Exchange) handlePlaceMarketOrder(market Market, order *orderbook.Order) []orderbook.Match {
+	ob := ex.orderbooks[market]
+
+	matches := ob.PlaceMarketOrder(order)
+
+	return matches
 }
 
 func (ex *Exchange) handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
@@ -151,23 +194,38 @@ func (ex *Exchange) handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
 	mu.Lock()
 	defer mu.Unlock()
 	market := Market(placeOrderData.Market)
-	ob := ex.orderbooks[market]
-	order := orderbook.NewOrder(placeOrderData.Bid, placeOrderData.Size)
+	order := orderbook.NewOrder(placeOrderData.Bid, placeOrderData.Size, placeOrderData.UserID)
 
 	w.Header().Set("Content-Type", "application/json")
 	switch placeOrderData.Type {
 	case LIMIT_ORDER:
 		w.WriteHeader(http.StatusCreated)
-		ob.PlaceLimitOrder(placeOrderData.Price, order)
+		if err := ex.handlePlaceLimitOrder(market, placeOrderData.Price, order); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		json.NewEncoder(w).Encode(map[string]any{"msg": "Limit order placed successfully"})
 	case MARKET_ORDER:
 		w.WriteHeader(http.StatusCreated)
-		matches := ob.PlaceMarketOrder(order)
+
+		matches := ex.handlePlaceMarketOrder(market, order)
+		// TODO: Implement handle matches
 		matchedOrder := make([]*Match, len(matches))
 		for i := range matches {
-			matchedOrder[i] = &Match{
-				SizeFilled: matches[i].SizeFilled,
-				Price:      matches[i].Price,
+			if order.Bid {
+				matchedOrder[i] = &Match{
+					ID:         matches[i].Ask.ID,
+					Bid:        matches[i].Ask.Bid,
+					SizeFilled: matches[i].SizeFilled,
+					Price:      matches[i].Price,
+				}
+			} else {
+				matchedOrder[i] = &Match{
+					ID:         matches[i].Bid.ID,
+					Bid:        matches[i].Bid.Bid,
+					SizeFilled: matches[i].SizeFilled,
+					Price:      matches[i].Price,
+				}
 			}
 		}
 		json.NewEncoder(w).Encode(map[string]any{"msg": matchedOrder})

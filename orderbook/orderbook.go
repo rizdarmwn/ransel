@@ -16,6 +16,7 @@ type Match struct {
 
 type Order struct {
 	ID        uint64
+	UserID    uint64
 	Size      *big.Int
 	Bid       bool
 	Limit     *Limit
@@ -27,8 +28,9 @@ func (o Orders) Len() int           { return len(o) }
 func (o Orders) Swap(i, j int)      { o[i], o[j] = o[j], o[i] }
 func (o Orders) Less(i, j int) bool { return o[i].Timestamp < o[j].Timestamp }
 
-func NewOrder(bid bool, size *big.Int) *Order {
+func NewOrder(bid bool, size *big.Int, userID uint64) *Order {
 	return &Order{
+		UserID:    userID,
 		ID:        uint64(time.Now().UnixNano()),
 		Size:      size,
 		Bid:       bid,
