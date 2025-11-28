@@ -26,7 +26,7 @@ func transferETH(client *ethclient.Client, from *ecdsa.PrivateKey, to common.Add
 		return err
 	}
 
-	nonce, err := client.PendingNonceAt(context.Background(), fromAddress)
+	nonce, err := client.PendingNonceAt(ctx, fromAddress)
 	if err != nil {
 		return err
 	}
