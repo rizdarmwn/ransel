@@ -157,24 +157,11 @@ func (ex *Exchange) handlePlaceLimitOrder(market Market, price *big.Int, order *
 	ob := ex.orderbooks[market]
 	ob.PlaceLimitOrder(price, order)
 
-	user, ok := ex.users[order.UserID]
-	if !ok {
-		return errors.New("user not found")
-	}
-
-	exPublicKey := ex.privateKey.Public()
-	exPublicKeyECDSA, ok := exPublicKey.(*ecdsa.PublicKey)
-	if !ok {
-		return errors.New("invalid public key type")
-	}
-
-	exchangeAddress := crypto.PubkeyToAddress(*exPublicKeyECDSA)
-	return transferETH(ex.Client, user.privateKey, exchangeAddress, order.Size)
+	return nil
 }
 
 func (ex *Exchange) handlePlaceMarketOrder(market Market, order *orderbook.Order) []orderbook.Match {
 	ob := ex.orderbooks[market]
-
 	matches := ob.PlaceMarketOrder(order)
 
 	return matches
@@ -209,6 +196,10 @@ func (ex *Exchange) handlePlaceOrder(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 
 		matches := ex.handlePlaceMarketOrder(market, order)
+		if err := ex.handleMatches(matches); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		// TODO: Implement handle matches
 		matchedOrder := make([]*Match, len(matches))
 		for i := range matches {
@@ -315,4 +306,25 @@ func (ex *Exchange) handleGetBook(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(orderbookData)
+}
+
+func (ex *Exchange) handleMatches(matches []orderbook.Match) error {
+	for _, match := range matches {
+		fromUser, ok := ex.users[match.Ask.UserID]
+		if !ok {
+			return errors.New("user not found")
+		}
+		toUser, ok := ex.users[match.Bid.UserID]
+		if !ok {
+			return errors.New("user not found")
+		}
+		toAddress := crypto.PubkeyToAddress(toUser.privateKey.PublicKey)
+
+		amount := match.SizeFilled
+
+		if err := transferETH(ex.Client, fromUser.privateKey, toAddress, amount); err != nil {
+			return err
+		}
+	}
+	return nil
 }
