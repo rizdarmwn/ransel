@@ -101,6 +101,8 @@ func NewServer(ctx context.Context) (*http.Server, error) {
 	mux.HandleFunc("/order", ex.handlePlaceOrder)
 	mux.HandleFunc("/book/{market}", ex.handleGetBook)
 	mux.HandleFunc("/order/{id}", ex.handleCancelOrder)
+	mux.HandleFunc("/book/{market}/bid", ex.handleGetBestBid)
+	mux.HandleFunc("/book/{market}/ask", ex.handleGetBestAsk)
 
 	fmt.Printf("Running server on port %s\n", cfg.Port)
 
@@ -327,4 +329,58 @@ func (ex *Exchange) handleMatches(matches []orderbook.Match) error {
 		}
 	}
 	return nil
+}
+
+type BestPrice struct {
+	Price *big.Int
+}
+
+func (ex *Exchange) handleGetBestBid(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	market := Market(r.PathValue("market"))
+	ob, ok := ex.orderbooks[market]
+	if !ok {
+		http.Error(w, "Market not found", http.StatusNotFound)
+		return
+	}
+
+	if len(ob.Bids()) == 0 {
+		http.Error(w, "No bids found", http.StatusNotFound)
+		return
+	}
+
+	bestBid := BestPrice{
+		Price: ob.Bids()[0].Price,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(bestBid)
+}
+
+func (ex *Exchange) handleGetBestAsk(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	market := Market(r.PathValue("market"))
+	ob, ok := ex.orderbooks[market]
+	if !ok {
+		http.Error(w, "Market not found", http.StatusNotFound)
+		return
+	}
+
+	if len(ob.Asks()) == 0 {
+		http.Error(w, "No asks found", http.StatusNotFound)
+		return
+	}
+
+	bestAsk := BestPrice{
+		Price: ob.Asks()[0].Price,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(bestAsk)
 }
